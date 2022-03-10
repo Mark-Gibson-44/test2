@@ -8,6 +8,9 @@
 #include "llvm/Bitcode/BitcodeWriter.h"
 #include <llvm-c/BitReader.h>
 #include <llvm-c/BitWriter.h>
+#include "llvm/Frontend/OpenMP/OMPIRBuilder.h"
+#include "llvm/IR/Constants.h"
+
 
 #include <iostream>
 #include <string>
@@ -15,10 +18,14 @@
 
 using namespace llvm;
 
+std::vector<Instruction*> rem;
+
+
 Value* vectorizeValue(Value* val, int VECTOR_SIZE, PHINode* indVar) {
       
 	if (auto* constant = dyn_cast<ConstantData>(val)) {
-			
+			//If a constant value vectorise directly
+			return val;
         	return ConstantDataVector::getSplat(VECTOR_SIZE, constant);
 
       }
@@ -27,14 +34,16 @@ Value* vectorizeValue(Value* val, int VECTOR_SIZE, PHINode* indVar) {
         	Value* initVec;
 			raw_ostream &output2 = outs();
         	if (auto* intType = dyn_cast<IntegerType>(inst->getType())) {
-				
+				return val;
           	initVec =
               	ConstantDataVector::getSplat(VECTOR_SIZE,
                   	ConstantInt::get(intType, 0));
 
         	} else {
 				if (LoadInst *l = dyn_cast<LoadInst>(val)){
+					
 					auto q = l->getPointerOperandType();
+					
 					//std::cout << "\n";
 					//p->print(output2);
 					//std::cout << " " <<  p->isPointerTy();
@@ -48,25 +57,43 @@ Value* vectorizeValue(Value* val, int VECTOR_SIZE, PHINode* indVar) {
 
 
 						//std::cout << "<==========\n";
-						if(PointerType *p2 = dyn_cast<PointerType>(nested)){
+						while(PointerType *p2 = dyn_cast<PointerType>(nested)){
 							//std::cout << "NESTED\n";
-							return val;
+							
+							nested = p2->getElementType();
+							p = p2;
 						}
+						
+						//nested->print(output2);
+						//FUCK ABOUT WITH nested type to increase load size;
+						//auto x = ConstantDataVector::getSplat(VECTOR_SIZE, ConstantFP::get(nested, 0.0));
+						return val;
 					}
 
 				}
-				
+				if (val->getType()->isDoubleTy()) {
+					std::cout << "DOUBLE\n";
+          	initVec =
+              	ConstantDataVector::getSplat(VECTOR_SIZE,
+                  	ConstantInt::get(val->getType(), 0));
+
+        	}
+			
           	initVec =
               	ConstantDataVector::getSplat(VECTOR_SIZE,
                   	ConstantFP::get(val->getType(), 0.0));
 				
         	}
           
-        	builder.SetInsertPoint(inst->getNextNode());
+        	//builder.SetInsertPoint(inst->getNextNode());
+
+			builder.SetInsertPoint(inst);
+
+
 
         	Value* curVec = initVec;
         	for (int i = 0; i < VECTOR_SIZE; i++) {
-          		curVec = builder.CreateInsertElement(curVec, inst, builder.getInt64(i));
+          		//curVec = builder.CreateInsertElement(curVec, inst, initVec);
         	}
 
         	// vector of inductive variables has to have its stride
@@ -90,7 +117,6 @@ Value* vectorizeValue(Value* val, int VECTOR_SIZE, PHINode* indVar) {
 	
 	return NULL;
 }
-
 
 void Opt::IdentifyOptSpace(){
 	auto funcIter = M->begin();
@@ -123,36 +149,111 @@ void Opt::IdentifyOptSpace(){
 	//For all insert points optimise corresponding to a certain version
 	for(int i = 0; i < opt_start.size(); i++){
 		dump_Instructions(opt_start[i], opt_end[i]);
+
+		for(auto& r: rem){
+			r->eraseFromParent();
+		}
 	}
+
 	raw_ostream &output2 = outs();
 	M->print(output2, nullptr);
 }
 
 
+//vectoriseOperand(v1, 8 , Type::getDoubleTy(M->getContext));
+/*
+void vectoriseOperand(Value* operand, int vector_size, Type* doubleTyID){
+	
+	
+	
+	Type* vecTy = VectorType::get(DoubleTyID, vector_size);
+	Value* newlt;
+	builder->CreateInsertElement(vecTy, newlt, operand);
+
+}
+*/
+
 void Opt::dump_Instructions(Instruction* start, Instruction* end){
 	int original = M->getInstructionCount();
 	//std::cout << "Start instruction" << std::endl;
+	//std::cout << "BEFORE " << original << "\n";
 	int i = 0;
 	raw_ostream &output = outs();	
 	auto iterator = start;
 	while(iterator != end){
+		IRBuilder<> builder(iterator);
 		if(StoreInst *s = dyn_cast<StoreInst>(&*iterator)){
 
 		} else if (LoadInst *l = dyn_cast<LoadInst>(&*iterator)){
 
 		}else{
 		i++;
+		Value* t;
 		//std::cout << iterator->getOpcodeName() << " With " << iterator->getNumOperands() << std::endl;
 		for(int opNum = 0; opNum < iterator->getNumOperands(); opNum++){
 			auto operand = iterator->getOperand(opNum);
 			//operand->print(output);
 			//std::cout << std::endl;
 			PHINode* indVar2;// = L->getCanonicalInductionVariable();
-			auto test2 = vectorizeValue(operand,4, indVar2);
+			auto test2 = vectorizeValue(operand,8, indVar2);
+			t = test2;
 			//test2->print(output);
 			//std::cout << opNum << "\n";
 		}
-	
+		//iterator->print(output);
+		//std::cout << "\n";
+		auto opcode__ = iterator->getOpcode();
+
+		//std::cout << "OPCODE " << opcode__ << "\n";
+		
+
+		switch(opcode__){
+			case Instruction::Load :{
+					Type* vecTy = VectorType::get(Type::getDoubleTy(M->getContext()), 8);
+					Value* help = UndefValue::get(vecTy);
+					Instruction* fullVector;
+					for(int  i = 0; i < 8; i++){
+						Constant* index = Constant::getIntegerValue(Type::getDoubleTy(M->getContext()), APInt(32, i));
+						 fullVector = InsertElementInst::Create(help, iterator->getOperand(0), index);
+
+					}
+					auto insertion = builder.Insert(fullVector);
+					builder.CreateLoad(help, fullVector, "LOAD");
+			}
+			break;
+
+			case Instruction::FMul: {
+				Type* vecTy = VectorType::get(Type::getDoubleTy(M->getContext()), 8);
+				Value* help = UndefValue::get(vecTy);
+				
+				Constant* index = Constant::getIntegerValue(Type::getDoubleTy(M->getContext()), APInt(32, 0));
+				
+				Instruction* fullVector = InsertElementInst::Create(help, iterator->getOperand(0), index);
+				auto insertion = builder.Insert(fullVector);
+				//builder.CreateFMul(help, insertion, "inserter");
+				auto a = builder.CreateFMul(insertion, insertion, "inserter");
+				//builder.CreateGEP(Type::getDoubleTy(M->getContext()), fullVector, index, "gep");
+				//builder.CreateGEP(vecTy, a, 0, "gep");
+				//builder.CreateInsertElement(newlt, iterator->getOperand(1), uit);
+				//builder.CreateFMul(iterator->getOperand(0), iterator->getOperand(1), "insert");
+				//Instruction* extract = ExtractElementInst::Create(iterator->getOperand(0), help, index);
+				
+				Value* v1 = builder.CreateExtractElement(help, builder.getInt32(0));
+				//builder.Insert(v1);
+				builder.CreateFAdd(iterator->getOperand(0), v1, "VEC ADD");
+				builder.CreateStore(help, v1, "Sore");
+				//builder.CreateExtractElement(help, index, "Extract");
+			}
+				break;
+			case Instruction::FAdd:
+				builder.CreateFAdd(iterator->getOperand(0), iterator->getOperand(1), "insert");
+
+			
+			 
+		}
+
+
+		//rem.push_back(iterator);
 		Value* v = ConstantFP::get(M->getContext(), APFloat(0.0));
 		
 		//auto builder = std::make_unique<IRBuilder<>>(iterator);
@@ -174,6 +275,8 @@ void Opt::dump_Instructions(Instruction* start, Instruction* end){
 
 	//std::cout << "Finished with " << i << " Instructions" << std::endl;
 	//std::cout << "Increase " << M->getInstructionCount() - original << std::endl;
+
+	std::cout << "After " << M->getInstructionCount() << "\n";
 }
 
 
@@ -248,3 +351,4 @@ void optimiseMesh(Instruction* start, Instruction* end, int mesh_height, int vec
 	}
 
 }
+
