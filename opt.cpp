@@ -173,6 +173,7 @@ void vectoriseOperand(Value* operand, int vector_size, Type* doubleTyID){
 }
 */
 
+Value* prev_vec = nullptr;
 void Opt::dump_Instructions(Instruction* start, Instruction* end){
 	int original = M->getInstructionCount();
 	//std::cout << "Start instruction" << std::endl;
@@ -180,12 +181,14 @@ void Opt::dump_Instructions(Instruction* start, Instruction* end){
 	int i = 0;
 	raw_ostream &output = outs();	
 	auto iterator = start;
+	Value* prevLoad;
 	while(iterator != end){
 		IRBuilder<> builder(iterator);
 		if(StoreInst *s = dyn_cast<StoreInst>(&*iterator)){
 
 		} else if (LoadInst *l = dyn_cast<LoadInst>(&*iterator)){
-
+			prevLoad = l->getPointerOperand();
+			
 		}else{
 		i++;
 		Value* t;
@@ -206,18 +209,29 @@ void Opt::dump_Instructions(Instruction* start, Instruction* end){
 
 		//std::cout << "OPCODE " << opcode__ << "\n";
 		
-
+		//Value* ptrV;
 		switch(opcode__){
 			case Instruction::Load :{
 					Type* vecTy = VectorType::get(Type::getDoubleTy(M->getContext()), 8);
 					Value* help = UndefValue::get(vecTy);
-					Instruction* fullVector;
-					for(int  i = 0; i < 8; i++){
-						Constant* index = Constant::getIntegerValue(Type::getDoubleTy(M->getContext()), APInt(32, i));
-						 fullVector = InsertElementInst::Create(help, iterator->getOperand(0), index);
+					
+					Constant* index = Constant::getIntegerValue(Type::getDoubleTy(M->getContext()), APInt(32, 0));
 
-					}
+					auto allocV = builder.CreateAlloca(vecTy, 0, "HorseCock");
+					//builder.Insert(allocV);
+					Value *CurVar = builder.CreateLoad(allocV);
+					Instruction* fullVector;
+					/*for(int  i = 0; i < 8; i++){
+						Constant* index = Constant::getIntegerValue(Type::getDoubleTy(M->getContext()), APInt(32, i));
+						fullVector = InsertElementInst::Create(help, iterator->getOperand(0), index);
+
+					}*/
+					//fullVector = InsertElementInst::Create(help, iterator->getOperand(0), index);
+					fullVector = InsertElementInst::Create(help, CurVar, index);
+
 					auto insertion = builder.Insert(fullVector);
+
+					
 					builder.CreateLoad(help, fullVector, "LOAD");
 			}
 			break;
@@ -225,7 +239,7 @@ void Opt::dump_Instructions(Instruction* start, Instruction* end){
 			case Instruction::FMul: {
 				Type* vecTy = VectorType::get(Type::getDoubleTy(M->getContext()), 8);
 				Value* help = UndefValue::get(vecTy);
-				
+				Type* vecPtrTy = PointerType::get(vecTy, 0);
 				Constant* index = Constant::getIntegerValue(Type::getDoubleTy(M->getContext()), APInt(32, 0));
 				
 				Instruction* fullVector = InsertElementInst::Create(help, iterator->getOperand(0), index);
@@ -237,11 +251,18 @@ void Opt::dump_Instructions(Instruction* start, Instruction* end){
 				//builder.CreateInsertElement(newlt, iterator->getOperand(1), uit);
 				//builder.CreateFMul(iterator->getOperand(0), iterator->getOperand(1), "insert");
 				//Instruction* extract = ExtractElementInst::Create(iterator->getOperand(0), help, index);
+				Type* dblPtrTy = PointerType::get(Type::getDoubleTy(M->getContext()), 0);
+				Value* v1 = builder.CreateExtractElement(insertion, builder.getInt32(0));
 				
-				Value* v1 = builder.CreateExtractElement(help, builder.getInt32(0));
+				auto cast1 = builder.CreateBitCast(prevLoad, vecPtrTy, "BC1");
+				auto realVec = builder.CreateLoad(cast1, vecTy, "BC2");
+				auto realVecInstr = builder.CreateFMul(realVec, insertion, "real_inserter");
+				auto cast2 = builder.CreateBitCast(realVecInstr, vecPtrTy, "Cast2");
+				auto realStore = builder.CreateStore(cast2, prevLoad, "Store");
+
 				//builder.Insert(v1);
-				builder.CreateFAdd(iterator->getOperand(0), v1, "VEC ADD");
-				builder.CreateStore(help, v1, "Sore");
+				//builder.CreateFAdd(iterator->getOperand(0), v1, "VEC ADD");
+				//builder.CreateStore(help, v1, "Store");
 				//builder.CreateExtractElement(help, index, "Extract");
 			}
 				break;
